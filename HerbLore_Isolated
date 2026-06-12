@@ -1,0 +1,1937 @@
+using System;
+using System.Collections.Generic;
+using System.Xml;
+using Sims3.Gameplay;
+using Sims3.Gameplay.Abstracts;
+using Sims3.Gameplay.Actors;
+using Sims3.Gameplay.ActorSystems;
+using Sims3.Gameplay.Autonomy;
+using Sims3.Gameplay.Core;
+using Sims3.Gameplay.EventSystem;
+using Sims3.Gameplay.Interactions;
+using Sims3.Gameplay.Interfaces;
+using Sims3.Gameplay.Objects;
+using Sims3.Gameplay.ObjectComponents;
+using Sims3.Gameplay.Objects.FoodObjects;
+using Sims3.Gameplay.Objects.Gardening;
+using Sims3.Gameplay.Objects.Miscellaneous;
+using Sims3.Gameplay.Pools;
+using Sims3.Gameplay.Skills;
+using Sims3.Gameplay.Socializing;
+using Sims3.Gameplay.ThoughtBalloons;
+using Sims3.Gameplay.Utilities;
+using Sims3.SimIFace;
+using Sims3.SimIFace.Enums;
+using Sims3.UI;
+using Sims3.UI.Hud;
+//using static Echoweaver.Sims3Game.WarriorCats.Config; //REMOVED CONFIG ENTIRELY
+//using Echoweaver.Sims3Game.WarriorCats.HerbLore; //REMOVED, PUT THE SKILL IN SAME NAMESPACE
+using static Sims3.Gameplay.Core.Terrain;
+using static Sims3.Gameplay.Skills.Gardening;
+using static Sims3.Gameplay.Objects.Gardening.Plant;
+using static Sims3.UI.StyledNotification;
+using static Sims3.SimIFace.World;
+using PlantableObjectData = Sims3.Gameplay.ObjectComponents.PlantObject.PlantableObjectData;
+using Queries = Sims3.Gameplay.Queries;
+
+namespace Echoweaver.Sims3Game.WarriorCats
+{
+    //THIS WAS WHERE public static class Config WAS
+
+    public class Loader //MOST THINGS CHANGED WERE IN THIS CLASS, AND BEGINNING OF THE SKILL CLASS
+    {
+        static bool HasBeenLoaded = false;
+
+        [Tunable]
+        protected static bool kInstantiator = false;
+
+        //ADDED THE THREE BELOW FROM THE Config CLASS AFTER CONSOLIDATION
+        //Tunings will go here
+        [Tunable]
+        [TunableComment("The max distance a pet must be from a water source to try to route to it.")]
+        public static float kMaxWaterDistance = 40f;
+
+        [Tunable]
+        [TunableComment("Description:  Max amount of time (in minutes) to play in the water")]
+        public static float kMaxPlayInWaterTime = 30f;
+
+        public static string LocalizeStr(string name, params object[] parameters)
+        {
+            return Localization.LocalizeString("Echoweaver/Warriorcats:" + name, parameters);
+        }
+        //DOES ANYTHING?
+
+        static Loader()
+        {
+            // gets the OnPreload method to run before the whole savegame is loaded so your sim doesn't find
+            // the skill missing if they need to access its data
+            LoadSaveManager.ObjectGroupsPreLoad += Loader.OnPreload;
+            World.sOnWorldLoadFinishedEventHandler += new EventHandler(OnWorldLoadFinishedHandler);
+        }
+
+        static void OnPreload()
+        {
+            try
+            {
+                if (HasBeenLoaded == true) return; // you only want to run it once per gameplay session
+
+                HasBeenLoaded = true; //CHANGED TOP LINE TO == true ONE
+                // fill this in with the resourcekey of your SKIL xml
+                XmlDbData data = XmlDbData.ReadData(new ResourceKey(0x750F8D59EEBD0701, 0xA8D58BE5, 0x00000000), false);
+                //CHANGED INSTANCE NUMBERS TO CURRENT SKIL 
+
+                if (data == null)
+                {
+                    return;
+                }
+
+                SkillManager.ParseSkillData(data, true);
+            }
+            catch (Exception Ex)
+            {
+                return;
+            }
+        }
+
+
+        public static void OnWorldLoadFinishedHandler(object sender, System.EventArgs e)
+        {
+
+            //REMOVED
+            //LoadSocialData("EWWarriors_SocialData"); 
+
+            //REMOVED BECAUSE THROWING ERROR (NO PET INTERACTIONS ADDED? ONLY PLANT)
+            //foreach (Sim pet in Queries.GetObjects<Sim>())
+            //{
+            //    if (pet.IsCat || pet.IsADogSpecies)
+            //    {
+            //        AddPetInteractions(pet);
+            //    }
+            //}
+
+            foreach (Plant p in Queries.GetObjects<Plant>())
+            {
+                AddPlantInteractions(p);
+            }
+
+            foreach (Ingredient i in Queries.GetObjects<Ingredient>())
+            {
+                PlantableComponent plantable = i.Plantable;
+                if (plantable != null)
+                {
+                    i.AddInteraction(EWPetPickUpPlantable.Singleton, true);
+                    AddPlantableInventoryInteractions(i);
+                }
+            }
+
+            EventTracker.AddListener(EventTypeId.kInventoryObjectAdded, new ProcessEventDelegate(OnObjectChanged));
+            EventTracker.AddListener(EventTypeId.kObjectStateChanged, new ProcessEventDelegate(OnObjectChanged));
+
+            //THIS WAS WHERE if (Config.kPetWarriorDebug) WAS
+        }
+
+        //REMOVED AS WELL DUE TO ERROR (NO PET INTERACTIONS ADDED? ONLY PLANT)
+        //private static void AddPetInteractions(Sim pet)
+        //{
+        //    throw new NotImplementedException();
+        //}
+
+        //REMOVED, NO SOCIAL DATA NECESSARY
+        //public static void LoadSocialData(string spreadsheet)
+        //{
+        //    XmlDocument root = Simulator.LoadXML(spreadsheet);
+        //    bool isEp5Installed = GameUtils.IsInstalled(ProductVersion.EP5);
+        //    if (spreadsheet != null)
+        //    {
+        //        XmlElementLookup lookup = new XmlElementLookup(root);
+        //        List<XmlElement> list = lookup["Action"];
+        //        foreach (XmlElement element in list)
+        //        {
+        //            CommodityTypes types;
+        //            XmlElementLookup table = new XmlElementLookup(element);
+        //            ParserFunctions.TryParseEnum<CommodityTypes>(element.GetAttribute("com"),
+        //                out types, CommodityTypes.Undefined);
+        //            ActionData data = new ActionData(element.GetAttribute("key"),
+        //                types, ProductVersion.BaseGame, table, isEp5Installed);
+        //            ActionData.Add(data);
+        //        }
+        //    }
+        //}
+
+        public static void AddPlantableInventoryInteractions(Ingredient i)
+        {
+            i.AddInventoryInteraction(EWPetPlantSeed.Singleton);
+        }
+
+        public static void AddPlantInteractions(Plant p)
+        {
+            p.AddInteraction(EWPetWatchPlant.Singleton, true);
+            p.AddInteraction(EWPetHarvest.Singleton, true);
+            p.AddInteraction(EWPetWeedPlant.Singleton, true);
+            p.AddInteraction(EWPetWaterPlant.Singleton, true);
+            p.AddInteraction(EWPetDisposePlant.Singleton, true);
+        }
+
+        public static ListenerAction OnObjectChanged(Event e)
+        {
+            Sim sim = e.Actor as Sim;
+            Plant p = e.TargetObject as Plant;
+            if (p != null)
+            {
+                AddPlantInteractions(p);
+            }
+
+            Ingredient i = e.TargetObject as Ingredient;
+
+            if (i != null)
+            {
+                PlantableComponent pc = i.Plantable;
+                if (pc != null)
+                {
+                    i.AddInteraction(EWPetPickUpPlantable.Singleton, true);
+
+                    if (sim.IsPet && i.InInventory)
+                    {
+                        bool has_plantable_interactions = false;
+                        foreach (InteractionObjectPair pair in e.TargetObject.GetAllInventoryInteractionsForActor(sim))
+                        {
+                            if (pair.InteractionDefinition.GetType() == EWPetPlantSeed.Singleton.GetType())
+                            {
+                                has_plantable_interactions = true;
+                                break;
+                            }
+                        }
+                        if (!has_plantable_interactions)
+                        {
+                            AddPlantableInventoryInteractions(i);
+                        }
+                    }
+                }
+            }
+
+            return ListenerAction.Keep;
+        }
+
+        //THIS WAS WHERE NotifyDebugState() WAS
+    }
+
+    /*
+     * Herb Lore Skill Levels:
+     * 0: Investigate Plant, Play with Plant (kitten), Pick up seeds
+     * 1: Harvest
+     * 2: Weed
+     * 3: Dispose, Plant Harvestables
+     * 4: Water
+     * 5: Tend
+     * 6: Fertilize with Fish
+     * 7: Tend gains speed
+     * 8: Harvest gains quality
+     * 9: ?
+     * 10: Make traveling herbs: Chammomile, Buzzberry, Licorice
+     */
+
+    public class EWHerbLoreSkill : Skill //CHANGED THE DLL NAME, SO HAD TO CHANGE THAT IN THE SKIL FILE
+    {
+        
+        public const SkillNames SkillNameID = (SkillNames)0x7808B943;
+
+        public const string sEWLocalizationKey = "Echoweaver/Skills/EWHerbLoreSkill:";
+
+        public static float kEWHerbLoreGainRateNormal = 15f;
+
+        bool mTestOppIsNew = false;
+
+        bool mTestOppIsCompleted = false;
+
+        [Persistable(false)]
+        public List<ITrackedStat> mTrackedStats;
+
+        [Persistable(false)]
+        public List<ILifetimeOpportunity> mLifetimeOpportunities;
+
+        public Dictionary<string, PlantInfo> mHarvestCounts;
+
+        public int mNumberPlanted;
+
+        public int mNumberThingsHarvested;
+
+        public List<string> mPlantsPlanted;
+
+        public Quality mBestQualityHarvested = Quality.Any;
+
+        public int mUnknownSeedsPlanted;
+
+
+        public EWHerbLoreSkill(SkillNames guid) : base(guid)
+        {
+        }
+        private EWHerbLoreSkill()
+        {
+        }
+
+        public new string LocalizeString(string name, params object[] parameters)
+        {
+            return Localization.LocalizeString(SkillOwner.IsFemale, sEWLocalizationKey + name, parameters);
+        }
+
+        public static EWHerbLoreSkill StartSkillGain(Sim actor)
+        {
+            EWHerbLoreSkill skill = actor.SkillManager.GetSkill<EWHerbLoreSkill>(SkillNameID);
+            if (skill == null)
+            {
+                skill = actor.SkillManager.AddElement(SkillNameID) as EWHerbLoreSkill;
+            }
+            if (skill == null)
+            {
+                Show(new Format("Error: Attempt to add EWHerbLoreSkill to " + actor.Name + " FAILED.",
+                    NotificationStyle.kDebugAlert));
+                return null;
+            } //I READDED THIS TO SEE IF THIS WAS IN FACT NOT THE PROBLEM
+
+            // TODO: Check for skill gain modifiers
+            skill.StartSkillGain(kEWHerbLoreGainRateNormal);
+            return skill;
+        }
+
+        [Persistable]
+        public class PlantInfo
+        {
+            public int HarvestablesCount;
+
+            public Quality BestQuality = Quality.Any;
+
+            public int MostExpensive;
+        }
+
+        public class NumberPlanted : ITrackedStat
+        {
+            public EWHerbLoreSkill mSkill;
+
+            public string Description => Gardening.LocalizeString("NumberPlanted", mSkill.mNumberPlanted);
+
+            public NumberPlanted(EWHerbLoreSkill skill)
+            {
+                mSkill = skill;
+            }
+        }
+
+        public class UniquePlantsPlanted : ITrackedStat
+        {
+            public EWHerbLoreSkill mSkill;
+
+            public string Description
+            {
+                get
+                {
+                    double num = 0.0;
+                    if (mSkill.mPlantsPlanted != null)
+                    {
+                        int num2 = 0;
+                        foreach (string item in mSkill.mPlantsPlanted)
+                        {
+                            if (PlantDefinition.mDictionary.ContainsKey(item))
+                            {
+                                num2++;
+                            }
+                        }
+                        num = (double)num2 / (double)sUniquePlants;
+                        num = Math.Round(num, 2) * 100.0;
+                    }
+                    return Gardening.LocalizeString("UniquePlantsPlanted", num);
+                }
+            }
+
+            public UniquePlantsPlanted(EWHerbLoreSkill skill)
+            {
+                mSkill = skill;
+            }
+        }
+
+        public class UnknownSeeds : ITrackedStat
+        {
+            public EWHerbLoreSkill mSkill;
+
+            public string Description => Gardening.LocalizeString("UnknownSeeds", mSkill.mUnknownSeedsPlanted);
+
+            public UnknownSeeds(EWHerbLoreSkill skill)
+            {
+                mSkill = skill;
+            }
+        }
+
+        public class ItemsHarvested : ITrackedStat
+        {
+            public EWHerbLoreSkill mSkill;
+
+            public string Description => Gardening.LocalizeString("ItemsHarvested", mSkill.mNumberThingsHarvested);
+
+            public ItemsHarvested(EWHerbLoreSkill skill)
+            {
+                mSkill = skill;
+            }
+        }
+
+        public class BestHarvestable : ITrackedStat
+        {
+            public EWHerbLoreSkill mSkill;
+
+            public string Description
+            {
+                get
+                {
+                    if (mSkill.mBestQualityHarvested == Quality.Any)
+                    {
+                        return Gardening.LocalizeString("BestHarvestable", new object[1] {
+                    Gardening.LocalizeString ("NoneHarvested")
+                });
+                    }
+                    return Gardening.LocalizeString("BestHarvestable", new object[1] {
+                QualityHelper.GetQualityLocalizedString (mSkill.mBestQualityHarvested)
+            });
+                }
+            }
+
+            public BestHarvestable(EWHerbLoreSkill skill)
+            {
+                mSkill = skill;
+            }
+        }
+
+        public void Planted(Plant plant)
+        {
+            mNumberPlanted++;
+            PlantableComponent plantable = plant.Seed.Plantable;
+            string plantName = plantable.PlantDef.PlantName;
+            if (mPlantsPlanted == null)
+            {
+                mPlantsPlanted = new List<string>();
+            }
+            if (!mPlantsPlanted.Contains(plantName))
+            {
+                mPlantsPlanted.Add(plantName);
+            }
+            if (plantable.PlayerKnowledgeOfPlantableType == PlayerDisclosure.Concealed)
+            {
+                mUnknownSeedsPlanted++;
+            }
+            else
+            {
+                if (mHarvestCounts == null)
+                {
+                    mHarvestCounts = new Dictionary<string, PlantInfo>();
+                }
+                if (!mHarvestCounts.ContainsKey(plantName))
+                {
+                    mHarvestCounts.Add(plantName, new PlantInfo());
+                }
+            }
+        }
+        public bool HasPlanted(string plantName)
+        {
+            if (mHarvestCounts != null)
+            {
+                return mHarvestCounts.ContainsKey(plantName);
+            }
+            return false;
+        }
+
+        public bool HasHarvested()
+        {
+            if (mHarvestCounts != null)
+            {
+                foreach (PlantInfo value in mHarvestCounts.Values)
+                {
+                    if (value.HarvestablesCount > 0)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        public void Harvested(Quality quality, PlantDefinition def)
+        {
+            
+            if (mHarvestCounts == null)
+            {
+                mHarvestCounts = new Dictionary<string, PlantInfo>();
+            }
+            if (!mHarvestCounts.TryGetValue(def.PlantName, out value)) //REMOVED 'PlantHeight' FROM (out PlantInfo value) BECAUSE
+                                                                       //"Error 'PlantInfo' is a type but is used like a variable"
+            {
+                value = new PlantInfo();
+                value.HarvestablesCount = 1;
+                value.BestQuality = quality;
+                mHarvestCounts.Add(def.PlantName, value);
+            }
+            else
+            {
+                value.HarvestablesCount++;
+                if (quality > value.BestQuality)
+                {
+                    value.BestQuality = quality;
+                }
+            }
+            //REMOVED DUE TO COMPLICATIONS(???)
+            if (quality > mBestQualityHarvested)
+            {
+                mBestQualityHarvested = quality;
+            }
+            mNumberThingsHarvested++;
+            TestForNewLifetimeOpp();
+        }
+
+        public override List<ITrackedStat> TrackedStats => mTrackedStats;
+
+        public override List<ILifetimeOpportunity> LifetimeOpportunities => mLifetimeOpportunities;
+
+        // Skill Opportunities
+        [Tunable]
+        [TunableComment("")]
+        public static int kNumForOpportunity = 20;
+
+        private static Sims3.Gameplay.Objects.Gardening.PlantHeight height; //ADDED THIS IN ORDER TO NOT USE PlantHeight AS A VARIABLE BELOW 
+        private PlantInfo value; //ADDED THIS IN ORDER TO NOTE USE PlantInfo AS A VARIABLE ABOVE
+
+        //ALSO NEEDED TO ADD 'static' FOR THIS ONE APPARENTLY
+
+        public class OppTest : ILifetimeOpportunity
+        {
+            public EWHerbLoreSkill mSkill;
+
+            public string Title => mSkill.LocalizeString("TestOpportunity");
+
+            public string RewardDescription => mSkill.LocalizeString("TestDescription", kNumForOpportunity);
+
+            public string AchievedDescription => mSkill.LocalizeString("TestAchieved", mSkill.mSkillOwner);
+
+            public bool IsNew
+            {
+                get
+                {
+                    return mSkill.mTestOppIsNew;
+                }
+                set
+                {
+                    mSkill.mTestOppIsNew = value;
+                }
+            }
+            public bool Completed => mSkill.mTestOppIsCompleted;
+
+            public OppTest(EWHerbLoreSkill skill)
+            {
+                mSkill = skill;
+            }
+
+        }
+
+        public override void CreateSkillJournalInfo()
+        {
+            mTrackedStats = new List<ITrackedStat>();
+            mTrackedStats.Add(new NumberPlanted(this));
+            mTrackedStats.Add(new UniquePlantsPlanted(this));
+            mTrackedStats.Add(new ItemsHarvested(this));
+            mTrackedStats.Add(new BestHarvestable(this));
+            mTrackedStats.Add(new UnknownSeeds(this));
+            mLifetimeOpportunities = new List<ILifetimeOpportunity>();
+            mLifetimeOpportunities.Add(new OppTest(this));
+        }
+
+        public void UpdateSkillJournal(PlantDefinition harvestPlantDef, List<GameObject> objectsHarvested)
+        {
+            foreach (GameObject item in objectsHarvested)
+            {
+                Harvested(Plant.GetQuality(item.Plantable.QualityLevel), harvestPlantDef);
+            }
+        }
+
+        public static StateMachineClient CreateStateMachine(Sim s, HarvestPlant p, out Soil dummyIk)
+        {
+            dummyIk = Soil.Create(isDummyIk: true);
+            StateMachineClient val = StateMachineClient.Acquire(s, "petgardening");
+            //dummyIk.SetHiddenFlags(HiddenFlags.Nothing);
+            dummyIk.SetPosition(p.GetSoil().Position);
+            Vector3 forward = p.GetSoil().Position - s.Position;
+            dummyIk.SetForward(forward);
+            dummyIk.AddToWorld();
+            val.SetActor("x", s);
+            val.SetActor("gardenPlantBush", p);
+            val.SetActor("gardenSoil", p.GetSoil());
+            val.SetActor("Dummy", dummyIk);
+            if (!p.PlantDef.GetPlantHeight(out height)) //REMOVED 'PlantHeight' FROM (out PlantHeight height) BECAUSE
+                                                        //"Error 'PlantHeight' is a type but is used like a variable"
+            {
+                height = Sims3.Gameplay.Objects.Gardening.PlantHeight.Medium;
+            }
+            val.SetParameter("Plant Height", height);
+            //REMOVED DUE TO COMPLICATIONS(???)
+            return val;
+        }
+
+        public static bool DoHarvest(Sim actor, HarvestPlant target, EWHerbLoreSkill skill)
+        {
+            Slot[] containmentSlots = target.GetContainmentSlots();
+            List<GameObject> list = new List<GameObject>();
+            Slot[] array = containmentSlots;
+            foreach (Slot slotName in array)
+            {
+                GameObject gameObject = target.GetContainedObject(slotName) as GameObject;
+                if (gameObject != null && target.HarvestHarvestable(gameObject, actor, null))
+                {
+                    list.Add(gameObject);
+                }
+            }
+
+            if (list.Count > 0)
+            {
+                skill.UpdateSkillJournal(target.PlantDef, list);
+
+                if (!skill.HasHarvested())
+                {
+                    actor.ShowTNSIfSelectable(Localization.LocalizeString(actor.IsFemale,
+                        "Gameplay/Objects/Gardening/HarvestPlant/Harvest:FirstHarvest", actor, target.PlantDef.Name),
+                        NotificationStyle.kGameMessagePositive, target.ObjectId, actor.ObjectId);
+                }
+                target.PostHarvest();
+                return true;
+            }
+            return false;
+        }
+
+        public override bool ExportContent(IPropertyStreamWriter writer)
+        {
+            base.ExportContent(writer);
+            return true;
+        }
+
+        public override bool ImportContent(IPropertyStreamReader reader)
+        {
+            base.ImportContent(reader);
+            return true;
+        }
+
+        public override void MergeTravelData(Skill mergeSkill)
+        {
+            base.MergeTravelData(mergeSkill);
+            EWHerbLoreSkill skill = mergeSkill as EWHerbLoreSkill;
+        }
+    }
+
+
+    public class EWPetPickUpPlantable : Interaction<Sim, GameObject>
+    {
+        public class Definition : InteractionDefinition<Sim, GameObject, EWPetPickUpPlantable>
+        {
+            public override string GetInteractionName(Sim a, GameObject target, InteractionObjectPair interaction)
+            {
+                return LocalizeString("Pick Up"); //Localize - Pick Up
+            }
+
+            public override bool Test(Sim a, GameObject target, bool isAutonomous, ref GreyedOutTooltipCallback greyedOutTooltipCallback)
+            {
+                if (!a.SkillManager.HasElement(EWHerbLoreSkill.SkillNameID))
+                {
+                    return false;
+                }
+                PlantableComponent plantable = target.Plantable;
+                if (plantable == null)
+                {
+                    return false;
+                }
+                if (plantable.PlantDef == null)
+                {
+                    return false;
+                }
+                if (plantable.PlantDef.LimitedAvailability)
+                {
+                    return false;
+                }
+                ITreasureSpawnableObject treasureSpawnableObject = target as ITreasureSpawnableObject;
+                if (treasureSpawnableObject != null && treasureSpawnableObject.IsOnSpawner)
+                {
+                    return false;
+                }
+                return !target.InUse && CarrySystem.CouldPickUp(target as ICarryable);
+            }
+        }
+
+        public const string sLocalizationKey = "Gameplay/ObjectComponents/PickUpPlantable";
+
+        public static InteractionDefinition Singleton = new Definition();
+
+        public static string LocalizeString(string name, params object[] parameters)
+        {
+            return Localization.LocalizeString("Gameplay/ObjectComponents/PickUpPlantable:" + name, parameters);
+        }
+
+        public override bool Run()
+        {
+            EWHerbLoreSkill skill = EWHerbLoreSkill.StartSkillGain(Actor);
+            if (skill != null)
+            {
+                // Unable to use PetCarrySystem because plantable not recognized as IPetCarryable
+                // Not clear on how this interface works.
+                // Fortunately the CarryUtils methods used by both carry systems are less picky.
+                if (Actor.RouteToObjectRadius(Target, 0.3f))
+                {
+                    string modelname; //ADDED BECAUSE OF THE BELOW ERROR
+                    if (Target.Plantable.PlantDef.GetModelName(out modelname)) //DID NOT WANT 'out string modelname' SO CHANGED TO THIS VERSION(???)
+                    {
+                        CarryUtils.Acquire(Actor, Target);
+                        Actor.CarryStateMachine.SetParameter("Height", SurfaceHeight.Floor);
+                        Enter(Actor, Target, modelname);
+                        CarryUtils.Request(Actor, "PickUp");
+                        CarryUtils.Request(Actor, "Carry");
+                        AnimateIntoSimInventory(Actor);
+                        //CarryUtils.VerifyAnimationParent(Target, Actor);
+                        // Note: PutInSimInventory includes ExitCarry. This means the
+                        // state machine has exited and can't be used again without Acquire
+                        bool success = CarryUtils.PutInSimInventory(Actor);
+                        skill.StopSkillGain();
+                        skill.AddPoints(200);  // This takes some know-how for a pet
+                        return success;
+                    }
+                }
+            }
+            return false;
+        }
+
+        public static void Enter(Sim a, GameObject target, string modelname)
+        {
+            a.CarryStateMachine.SetActor("x", a);
+            a.CarryStateMachine.SetActor("object", target);
+            a.CarryStateMachine.SetParameter("model", "catToy", ProductVersion.EP5);
+            a.CarryStateMachine.SetParameter("NamespaceMap0From", modelname);
+            a.CarryStateMachine.SetParameter("NamespaceMap0To", "object");
+            a.CarryStateMachine.EnterState("x", "Enter");
+        }
+
+        public static void AnimateIntoSimInventory(Sim actor)
+        {
+            actor.CarryStateMachine.SetParameter("model", "prey", ProductVersion.EP5);
+            actor.CarryStateMachine.SetParameter("Height", SurfaceHeight.SimInventory);
+            actor.CarryStateMachine.RequestState("x", "PutDown");
+        }
+
+        public static bool PickUpFromSimInventory(Sim a, GameObject target, string modelname, bool removeFromInventory)
+        {
+            if (removeFromInventory && !a.Inventory.TryToRemove(target))
+            {
+                return false;
+            }
+            target.AddToWorld();
+            CarryUtils.Acquire(a, target);
+            a.CarryStateMachine.SetParameter("Height", SurfaceHeight.Floor);
+            Enter(a, target, modelname);
+            CarryUtils.Request(a, "PickUp");
+            target.SetHiddenFlags(HiddenFlags.Nothing);
+            CarryUtils.Request(a, "Carry");
+            return true;
+        }
+
+        public static bool PutDownOnFloor(Sim actor)
+        {
+            GameObject objectInMouth = actor.GetObjectInMouth();
+            GameObject gameObject = GlobalFunctions.CreateJigFromObject(objectInMouth) as GameObject;
+            actor.CarryStateMachine.SetParameter("model", "prey", ProductVersion.EP5);
+            actor.CarryStateMachine.SetParameter("Height", SurfaceHeight.Floor);
+            Vector3 position2 = actor.Position;
+            Vector3 forward2 = actor.ForwardVector;
+            GlobalFunctions.FindGoodLocationNearby(gameObject, ref position2, ref forward2, 0.7f,
+                GlobalFunctions.FindGoodLocationStrategies.All, (FindGoodLocationBooleans)20);
+            CarryUtils.Request(actor, "PutDown");
+            CarryUtils.ExitCarry(actor);
+            gameObject.SetPosition(World.SnapToFloor(position2));
+            gameObject.SetForward(forward2);
+            CarryUtils.VerifyAnimationUnParent(objectInMouth, actor, gameObject);
+            return true;
+        }
+    }
+
+
+    public class EWPetDisposePlant : Interaction<Sim, Plant>, IDisposePlantInteraction
+    {
+        public class Definition : InteractionDefinition<Sim, Plant, EWPetDisposePlant>
+        {
+            public override string GetInteractionName(Sim a, Plant target, InteractionObjectPair interaction)
+            {
+                return LocalizeString("Dispose"); //Localize - Dispose
+            }
+
+            public override bool Test(Sim a, Plant target, bool isAutonomous, ref GreyedOutTooltipCallback greyedOutTooltipCallback)
+            {
+                if (a.SkillManager.GetSkillLevel(EWHerbLoreSkill.SkillNameID) >= 3)
+                    return target.GardenInteractionLotValidityTest(a);
+                else return false;
+            }
+        }
+
+        public const string sLocalizationKey = "Gameplay/Objects/Gardening/Plant/DisposeAlivePlant";
+
+        public TrashPile mTrashPile;
+
+        public bool mPlantDeletePointOfNoReturn;
+
+        public bool mTrashPilePlaceInTrashCanFailure;
+
+        public List<InteractionObjectPair> mTrashPileInteractions;
+
+        public static InteractionDefinition Singleton = new Definition();
+
+        public static string LocalizeString(string name, params object[] parameters)
+        {
+            return Localization.LocalizeString("Gameplay/Objects/Gardening/Plant/DisposeAlivePlant:" + name, parameters);
+        }
+
+        public override void Cleanup()
+        {
+            DisposeInteractionCleanup(this, ref mTrashPile, ref mTrashPileInteractions, mPlantDeletePointOfNoReturn, mTrashPilePlaceInTrashCanFailure);
+            base.Cleanup();
+        }
+
+        public void SetTrashPile(TrashPile trashPile)
+        {
+            mTrashPile = trashPile;
+        }
+
+        public void RemoveTrashPileInteractions()
+        {
+            mTrashPileInteractions = new List<InteractionObjectPair>(mTrashPile.Interactions);
+            mTrashPile.RemoveAllInteractions();
+        }
+
+        public void ReachedPlantDeletePointOfNoReturn()
+        {
+            mPlantDeletePointOfNoReturn = true;
+        }
+
+        public void SetTrashPilePlaceInTrashCanFailure(bool trashPilePlaceInTrashCanFailure)
+        {
+            mTrashPilePlaceInTrashCanFailure = trashPilePlaceInTrashCanFailure;
+        }
+
+        public override bool Run()
+        {
+            if (Target.RouteSimToMeAndCheckInUse(Actor))
+            {
+                //				Plant.TryConfigureTendGardenInteraction(Actor.CurrentInteraction);
+                return DoDispose(Actor, Target, this);
+            }
+            else return false;
+        }
+
+        public bool DoDispose(Sim Actor, Plant Target, InteractionInstance interaction)
+        {
+            IDisposePlantInteraction disposePlantInteraction = interaction as IDisposePlantInteraction;
+            if (disposePlantInteraction == null)
+            {
+                return false;
+            }
+
+            EWHerbLoreSkill skill = EWHerbLoreSkill.StartSkillGain(Actor);
+            if (skill != null)
+            {
+
+                disposePlantInteraction.ReachedPlantDeletePointOfNoReturn();
+                interaction.StandardEntry();
+                interaction.BeginCommodityUpdates();
+
+                // TODO: Hope to use dig animation here. Need to be converted?
+                AcquireStateMachine("eatharvestablepet");
+                mCurrentStateMachine.SetActor("x", Actor);
+                mCurrentStateMachine.EnterState("x", "Enter");
+                SetParameter("IsEatingOnGround", paramValue: true);
+
+                uint footprintHash = Target.GetFootprintHash();
+                Target.DisableFootprint(footprintHash);
+                Target.GetSoil().DisableFootprint(1478897068u);
+
+                AnimateSim("EatHarvestable");
+                AnimateSim("Exit");
+                interaction.EndCommodityUpdates(true);
+                interaction.StandardExit();
+                return true;
+            }
+            return false;
+        }
+
+        public override ThumbnailKey GetIconKey()
+        {
+            //IL_0016: Unknown result type (might be due to invalid IL or missing references)
+            //IL_001d: Unknown result type (might be due to invalid IL or missing references)
+            if (Target == null && mTrashPile != null)
+            {
+                return mTrashPile.GetThumbnailKey();
+            }
+            return base.GetIconKey();
+        }
+    }
+
+
+    public class EWPetHarvest : ChainableGardeningInteraction<HarvestPlant>
+    {
+        public class Definition : InteractionDefinition<Sim, HarvestPlant, EWPetHarvest>
+        {
+            public override bool Test(Sim a, HarvestPlant target, bool isAutonomous, ref GreyedOutTooltipCallback greyedOutTooltipCallback)
+            {
+                if (a.SkillManager.GetSkillLevel(EWHerbLoreSkill.SkillNameID) >= 1
+                    && !(target is ForbiddenFruitTree))
+                {
+                    return HarvestPlant.HarvestTest(target, a);
+                }
+                else return false;
+            }
+            public override string GetInteractionName(Sim actor, HarvestPlant target, InteractionObjectPair iop)
+            {
+                return "Harvest"; //Localize - Harvest
+            }
+
+        }
+
+        public Soil mDummyIk;
+
+        public static InteractionDefinition Singleton = new Definition();
+        private Sims3.Gameplay.Objects.Gardening.PlantHeight height; //ADDED THIS IN ORDER TO NOT USE PlantHeight AS A VARIABLE BELOW
+
+        public override void ConfigureInteraction()
+        {
+            float harvestDuration = Target.GetHarvestDuration(Actor);
+            TimedStage timedStage = new TimedStage(GetInteractionName(), harvestDuration, showCompletionTime: false,
+                selectable: true, visibleProgress: true);
+            base.Stages = new List<Stage>(new Stage[1] {
+            timedStage
+            });
+        }
+
+        public override void Cleanup()
+        {
+            if (mDummyIk != null)
+            {
+                mDummyIk.Destroy();
+                mDummyIk = null;
+            }
+            base.Cleanup();
+        }
+
+        public override bool Run()
+        {
+            bool flag = false;
+            if (Target.RouteSimToMeAndCheckInUse(Actor) && HarvestPlant.HarvestTest(Target, Actor))
+            {
+                ConfigureInteraction();
+                //				Plant.TryConfigureTendGardenInteraction(Actor.CurrentInteraction);
+                flag = DoHarvest();
+            }
+            //if (IsChainingPermitted(flag))
+            //{
+            //	IgnorePlants.Add(Target);
+            //	if (Target.LotCurrent != null && Target.LotCurrent.IsWorldLot)
+            //	{
+            //		PushNextInteractionInChain(Singleton, HarvestPlant.HarvestTestWorldLot, Target.LotCurrent);
+            //	}
+            //	else
+            //	{
+            //		PushNextInteractionInChain(Singleton, HarvestPlant.HarvestTest, Target.LotCurrent);
+            //	}
+            //}
+            return flag;
+        }
+
+        public bool DoHarvest()
+        {
+            EWHerbLoreSkill skill = EWHerbLoreSkill.StartSkillGain(Actor);
+            if (skill != null)
+            {
+                Target.RemoveHarvestStateTimeoutAlarm();
+                StandardEntry();
+                BeginCommodityUpdates();
+                if (!Target.PlantDef.GetPlantHeight(out height)) //REMOVED out 'PlantHeight' height BECAUSE
+                                                                //"Error 'PlantHeight' is a type but is used like a variable"
+                {
+                    height = Sims3.Gameplay.Objects.Gardening.PlantHeight.Medium;
+                }
+                // TODO: Different animations -- scratching post for medium and high plants?
+                AcquireStateMachine("eatharvestablepet");
+                mCurrentStateMachine.SetActor("x", Actor);
+                mCurrentStateMachine.EnterState("x", "Enter");
+                SetParameter("IsEatingOnGround", paramValue: true);
+                AnimateSim("EatHarvestable");
+                Plant.StartStagesForTendableInteraction(this);
+                while (!Actor.WaitForExitReason(Sim.kWaitForExitReasonDefaultTime, ExitReason.Default))
+                {
+                    if (base.ActiveStage != null && base.ActiveStage.IsComplete(this))
+                    {
+                        Actor.AddExitReason(ExitReason.StageComplete);
+                    }
+                }
+                //Plant.PauseTendGardenInteractionStage(Actor.CurrentInteraction);
+                AnimateSim("Exit");
+                Slot[] containmentSlots = Target.GetContainmentSlots();
+                List<GameObject> list = new List<GameObject>();
+                Slot[] array = containmentSlots;
+                foreach (Slot slotName in array)
+                {
+                    GameObject gameObject = Target.GetContainedObject(slotName) as GameObject;
+                    if (gameObject != null && Target.HarvestHarvestable(gameObject, Actor, null))
+                    {
+                        list.Add(gameObject);
+                    }
+                }
+
+                if (list.Count > 0)
+                {
+                    skill.UpdateSkillJournal(Target.PlantDef, list);
+
+                    if (!skill.HasHarvested())
+                    {
+                        Actor.ShowTNSIfSelectable(Localization.LocalizeString(Actor.IsFemale,
+                            "Gameplay/Objects/Gardening/HarvestPlant/Harvest:FirstHarvest", Actor, Target.PlantDef.Name),
+                            NotificationStyle.kGameMessagePositive, Target.ObjectId, Actor.ObjectId);
+                    }
+                    Target.PostHarvest();
+                    EndCommodityUpdates(succeeded: true);
+                    StandardExit();
+                    skill.StopSkillGain();
+                    //Plant.UpdateTendGardenTimeSpent(this, SetHarvestTimeSpent);
+                    return Actor.HasExitReason(ExitReason.StageComplete);
+                }
+            }
+            return false;
+        }
+
+        public static void SetHarvestTimeSpent(ITendGarden tendGardenInteraction, float timeSpent)
+        {
+            tendGardenInteraction.HarvestTimeSpent = timeSpent;
+        }
+    }
+
+
+    public class EWPetMarkPlant : Plant.ViewPlant
+    {
+        public new class Definition : Plant.ViewPlant.Definition
+        {
+            public override bool Test(Sim a, Plant target, bool isAutonomous, ref GreyedOutTooltipCallback greyedOutTooltipCallback)
+            {
+                //                return a.IsCat;
+                return true;
+            }
+
+            public override string GetInteractionName(Sim actor, Plant target, InteractionObjectPair iop)
+            {
+                return "EWPetMarkPlant";
+
+            }
+        }
+
+        public new static InteractionDefinition Singleton = new Definition();
+
+        public override bool Run()
+        {
+            if (!Actor.RouteToPointRadialRange(Target.Position, Plant.kViewDistanceMin, Plant.kViewDistanceMax))
+            {
+                return false;
+            }
+            BeginCommodityUpdates();
+            //AcquireStateMachine()
+            Actor.PlaySoloAnimation("ac2a_soc_neutral_markSimAccept_friendly_neutral_x");
+            mCurrentStateMachine.RequestState("X", ""); // Pseudocode
+            //AcquireStateMachine("catdoginvestigate");
+            //EnterStateMachine("catdoginvestigate", "Enter", "x");
+            //AnimateSim("Investigate");
+            //AnimateSim("Exit");   
+            if (Target.QualityLevel < 0.3f)
+            {
+                Actor.PlayReaction(ReactionTypes.HissPet, ReactionSpeed.ImmediateWithoutOverlay);
+            }
+            else
+            {
+                Actor.PlayReaction(ReactionTypes.PositivePet, ReactionSpeed.ImmediateWithoutOverlay);
+            }
+            EndCommodityUpdates(succeeded: true);
+            return true;
+        }
+    }
+
+
+    public class EWPetPlantSeed : ImmediateInteraction<Sim, GameObject>
+    {
+        public class Definition : InteractionDefinition<Sim, GameObject, EWPetPlantSeed>
+        {
+            public override bool Test(Sim a, GameObject target, bool isAutonomous, ref GreyedOutTooltipCallback greyedOutTooltipCallback)
+            {
+                if (a.SkillManager.GetSkillLevel(EWHerbLoreSkill.SkillNameID) >= 3)
+                    return CommonPlantingTest(a, target, LotManager.ActiveLot, ref greyedOutTooltipCallback);
+                else return false;
+            }
+            public override string GetInteractionName(Sim a, GameObject target, InteractionObjectPair interaction)
+            {
+                return "Plant"; //Localize - Plant
+            }
+        }
+
+        public const string sLocalizationKey = "Gameplay/ObjectComponents/PlantObject";
+
+        public IGameObject mCurrentTarget;
+
+        public Soil mCurrentSoil;
+
+        public PlantInteractionType mInteractionType;
+
+        public List<PlantableObjectData> mObjectsToPlant;
+
+        public bool mInteractionPushed;
+
+        public bool mSoilPlacementFailure;
+
+        public static InteractionDefinition Singleton = new Definition();
+
+        public static string LocalizeString(string name, params object[] parameters)
+        {
+            return Localization.LocalizeString("Gameplay/ObjectComponents/PlantObject:" + name, parameters);
+        }
+
+        public override void Cleanup()
+        {
+            if (!mInteractionPushed || mSoilPlacementFailure)
+            {
+                if (mCurrentTarget != null)
+                {
+                    UnreservePlantablePlantingFailed(mCurrentTarget, Actor, mInteractionType);
+                }
+                if (mCurrentSoil != null)
+                {
+                    mCurrentSoil.Destroy();
+                    mCurrentSoil = null;
+                }
+            }
+            if (!mInteractionPushed && mObjectsToPlant != null)
+            {
+                while (mObjectsToPlant.Count > 0)
+                {
+                    EWPetDoPlant.CleanupPlantInstances(mObjectsToPlant[0], Actor, mInteractionType);
+                    mObjectsToPlant.RemoveAt(0);
+                }
+            }
+            base.Cleanup();
+        }
+
+        public override bool RunFromInventory()
+        {
+            mInteractionType = PlantInteractionType.FromInventory;
+            return DoSoilPlacementAndPlant();
+        }
+
+        public bool ReservePlantable()
+        {
+            if (mCurrentTarget.InUse)
+            {
+                return false;
+            }
+            mCurrentTarget.AddToUseList(Actor);
+            if (mInteractionType == PlantInteractionType.FromInventory
+                || mInteractionType == PlantInteractionType.FromInventoryPlantMany)
+            {
+                return Actor.Inventory.SetInUse(mCurrentTarget);
+            }
+            mCurrentTarget.SetOpacity(0.5f, 0f);
+            return true;
+        }
+
+        public static void UnreservePlantablePlantingFailed(IGameObject currentTarget, Sim sim,
+            PlantInteractionType interactionType)
+        {
+            currentTarget.RemoveFromUseList(sim);
+            if (interactionType == PlantInteractionType.FromInventory
+                || interactionType == PlantInteractionType.FromInventoryPlantMany)
+            {
+                if (!sim.Inventory.SetNotInUse(currentTarget))
+                {
+                    currentTarget.Destroy();
+                }
+                return;
+            }
+            currentTarget.SetOpacity(1f, 0f);
+            Ingredient ingredient = currentTarget as Ingredient;
+            if (ingredient != null)
+            {
+                ingredient.EnableFootprint();
+            }
+            else
+            {
+                (currentTarget as PlantableNonIngredient)?.EnableFootprint();
+            }
+        }
+
+        public virtual bool PlaceSoil()
+        {
+            if (!Actor.IsActiveSim)
+            {
+                return false;
+            }
+            mCurrentSoil.SetOwnerLot(Actor.LotHome);
+            eEditTypeHandTool editEndedType;
+            return GlobalFunctions.PlaceWithHandTool(mCurrentSoil, out editEndedType);
+        }
+
+        public bool DoSoilPlacementAndPlant()
+        {
+            EWHerbLoreSkill skill = EWHerbLoreSkill.StartSkillGain(Actor);
+            if (skill != null)
+            {
+                mCurrentTarget = Target;
+                bool flag = false;
+                do
+                {
+                    flag = false;
+                    if (!ReservePlantable())
+                    {
+                        break;
+                    }
+                    mCurrentSoil = (GlobalFunctions.CreateObjectOutOfWorld("GardenSoil") as Soil);
+                    if (mCurrentSoil == null)
+                    {
+                        break;
+                    }
+                    mCurrentSoil.SetPlantDef(PlantHelper.GetPlantDefinition(mCurrentTarget));
+                    mCurrentSoil.AddToWorld();
+                    mCurrentSoil.Ghost();
+                    if (!PlaceSoil())
+                    {
+                        mSoilPlacementFailure = true;
+                        break;
+                    }
+                    mCurrentSoil.AddToUseList(Actor);
+                    mCurrentSoil.SetPlanted();
+                    if (mObjectsToPlant == null)
+                    {
+                        mObjectsToPlant = new List<PlantableObjectData>();
+                    }
+                    mObjectsToPlant.Add(new PlantableObjectData(mCurrentTarget, mCurrentSoil));
+                    if (mInteractionType != PlantInteractionType.FromInventoryPlantMany)
+                    {
+                        continue;
+                    }
+                    uint stackNumber = Actor.Inventory.GetStackNumber(mCurrentTarget);
+                    if (stackNumber != 0)
+                    {
+                        List<IGameObject> stackObjects = Actor.Inventory.GetStackObjects(stackNumber, checkInUse: true);
+                        if (stackObjects.Count > 0)
+                        {
+                            mCurrentTarget = stackObjects[0];
+                            flag = true;
+                        }
+                    }
+                } while (flag);
+
+                if (mObjectsToPlant != null && mObjectsToPlant.Count > 0)
+                {
+                    EWPetDoPlant petDoPlant = EWPetDoPlant.Singleton.CreateInstance(Target, Actor, mPriority,
+                        base.Autonomous, cancellableByPlayer: true) as EWPetDoPlant;
+                    if (petDoPlant != null)
+                    {
+                        petDoPlant.SetObjectsToPlant(mObjectsToPlant);
+                        petDoPlant.PlantInteractionType = mInteractionType;
+                        if (Actor.InteractionQueue.Add(petDoPlant))
+                        {
+                            mInteractionPushed = true;
+                        }
+                    }
+                }
+                skill.StopSkillGain();
+                return true;
+            }
+            return false;
+        }
+
+        public static bool CommonPlantingTest(Sim a, GameObject target, Lot lotTryingToPlantingOn, ref GreyedOutTooltipCallback greyedOutTooltipCallback)
+        {
+            if (!PlantableComponent.PlantInteractionOpportunityTest(a, target))
+            {
+                return false;
+            }
+            if (CameraController.IsMapViewModeEnabled())
+            {
+                greyedOutTooltipCallback = new GreyedOutTooltipCallback(MapViewGreyedTooltip);
+                return false;
+            }
+            if (!PlantingLotTest(lotTryingToPlantingOn, a))
+            {
+                greyedOutTooltipCallback = new GreyedOutTooltipCallback(CanOnlyPlantOnHomeLot);
+                return false;
+            }
+            if (!a.IsCat)  // TODO: Skill test
+            {
+                return false;
+            }
+            return true;
+        }
+
+        public static string MapViewGreyedTooltip()
+        {
+            return LocalizeString("CantPlantInMapView");
+        }
+
+        public static string CanOnlyPlantOnHomeLot()
+        {
+            return LocalizeString("CanOnlyPlantOnHomeLot");
+        }
+
+        public static bool PlantingLotTest(Lot lotTryingToPlantingOn, Sim simTryingToPlant)
+        {
+            if (!lotTryingToPlantingOn.IsCommunityLot)
+            {
+                return lotTryingToPlantingOn.CanSimTreatAsHome(simTryingToPlant);
+            }
+            return false;
+        }
+    }
+
+    public class EWPetDoPlant : Interaction<Sim, GameObject>, IRouteFromInventoryOrSelfWithoutCarrying
+    {
+        public class Definition : InteractionDefinition<Sim, GameObject, EWPetDoPlant>
+        {
+            public override string GetInteractionName(Sim actor, GameObject target, InteractionObjectPair iop)
+            {
+                bool isFemale = actor.IsFemale;
+                if (target != null)
+                {
+                    return Localization.LocalizeString(isFemale, "Gameplay/ObjectComponents/DoPlant:DoPlant",
+                        target.GetLocalizedName());
+                }
+                return Localization.LocalizeString(isFemale, "Gameplay/Abstracts/GameObject/PlantObject:InteractionName");
+            }
+
+            public override bool Test(Sim a, GameObject target, bool isAutonomous,
+                ref GreyedOutTooltipCallback greyedOutTooltipCallback)
+            {
+                return true;
+            }
+        }
+
+        public List<PlantableObjectData> mObjectsToPlant;
+
+        public IGameObject CurrentTarget;
+
+        public Soil CurrentSoil;
+
+        public PlantInteractionType PlantInteractionType;
+
+        public Soil mDummyIk;
+
+        public int mTotalObjectsToPlant;
+
+        public static InteractionDefinition Singleton = new Definition();
+
+        public void ScriptHandlerOnSimAboutToPlant(StateMachineClient sender, IEvent evt)
+        {
+            mObjectsToPlant.RemoveAt(0);
+            CurrentSoil.UnGhost();
+        }
+
+        public override void Cleanup()
+        {
+            if (mObjectsToPlant != null)
+            {
+                while (mObjectsToPlant.Count > 0)
+                {
+                    CleanupPlantInstances(mObjectsToPlant[0], Actor, PlantInteractionType);
+                    mObjectsToPlant.RemoveAt(0);
+                }
+            }
+            if (mDummyIk != null)
+            {
+                mDummyIk.Destroy();
+                mDummyIk = null;
+            }
+            base.Cleanup();
+        }
+
+        public float GetCompletionFraction(InteractionInstance instance)
+        {
+            if (mObjectsToPlant == null)
+            {
+                return 0f;
+            }
+            float num = mTotalObjectsToPlant;
+            return (num - (float)mObjectsToPlant.Count) / num;
+        }
+
+        public override void ConfigureInteraction()
+        {
+            base.ConfigureInteraction();
+            if (mTotalObjectsToPlant > 1)
+            {
+                SimpleStage simpleStage = new SimpleStage(GetInteractionName(), 10f, GetCompletionFraction,
+                    showCompletionTime: false, selectable: false, visibleProgress: true);
+                base.Stages = new List<Stage>(new Stage[1] {
+                simpleStage
+            });
+            }
+        }
+
+        public override bool Run()
+        {
+            return RunCommon();
+        }
+
+        public override bool RunFromInventory()
+        {
+            return RunCommon();
+        }
+
+        public bool RunCommon()
+        {
+            if (mObjectsToPlant == null || mObjectsToPlant.Count == 0)
+            {
+                return false;
+            }
+            EWHerbLoreSkill skill = EWHerbLoreSkill.StartSkillGain(Actor);
+            if (skill != null)
+            {
+                while (mObjectsToPlant.Count > 0)
+                {
+                    PlantableObjectData data = mObjectsToPlant[0];
+                    CurrentTarget = data.PlantableObject;
+                    CurrentSoil = data.Soil;
+                    if (Plant.DoPlantRoute(Actor, CurrentSoil))
+                    {
+                        UnreservePlantablePlantingSucceeded();
+                        Plant plant = CreatePlantFromSeed(CurrentTarget, CurrentSoil, Actor);
+                        plant.UpdateHealth();
+                        plant.AddToUseList(Actor);
+                        AcquireStateMachine("eatharvestablepet");
+                        mCurrentStateMachine.SetActor("x", Actor);
+                        mCurrentStateMachine.EnterState("x", "Enter");
+                        SetParameter("IsEatingOnGround", paramValue: true);
+                        // Parrotting the dummyIK code from the plantMedium state machine
+                        mDummyIk = Soil.Create(isDummyIk: true);
+                        //mDummyIk.SetHiddenFlags(-1);
+                        mDummyIk.SetPosition(plant.GetSoil().Position);
+                        Vector3 forward = plant.GetSoil().Position - Actor.Position;
+                        mDummyIk.SetForward(forward);
+                        mDummyIk.AddToWorld();
+                        BeginCommodityUpdates();
+                        AddOneShotScriptEventHandler(201u, new SacsEventHandler(ScriptHandlerOnSimAboutToPlant));
+                        AnimateSim("EatHarvestable");
+                        skill.Planted(plant);
+                        AnimateSim("Exit");
+                        EndCommodityUpdates(succeeded: true);
+                        plant.RemoveFromUseList(Actor);
+                        CurrentSoil.RemoveFromUseList(Actor);
+                        if (mDummyIk != null)
+                        {
+                            mDummyIk.Destroy();
+                            mDummyIk = null;
+                        }
+                        EventTracker.SendEvent(EventTypeId.kGardened, Actor);
+                        if (PlantHelper.IsSeed(CurrentTarget))
+                        {
+                            EventTracker.SendEvent(EventTypeId.kEventSeedPlanted, Actor, CurrentTarget);
+                        }
+                        EventTracker.SendEvent(EventTypeId.kPlantedObject, Actor, plant);
+                    }
+                    else
+                    {
+                        CleanupPlantInstances(data, Actor, PlantInteractionType);
+                        mObjectsToPlant.RemoveAt(0);
+                    }
+                }
+                skill.StopSkillGain();
+                skill.AddSkillPointsLevelClamped(200, 10); // Bonus, Planting takes animal thinking
+                return true;
+            }
+            return false;
+        }
+
+        public void SetObjectsToPlant(List<PlantableObjectData> objectsToPlant)
+        {
+            mObjectsToPlant = new List<PlantableObjectData>(objectsToPlant);
+            mTotalObjectsToPlant = mObjectsToPlant.Count;
+            ConfigureInteraction();
+        }
+
+        public static void CleanupPlantInstances(PlantableObjectData data, Sim sim, PlantInteractionType plantInteractionType)
+        {
+            //IL_0010: Unknown result type (might be due to invalid IL or missing references)
+            if (data.Soil != null)
+            {
+                Plant plant = data.Soil.GetContainedObject(Soil.ContainmentSlots.Plant) as Plant;
+                if (plant != null)
+                {
+                    plant.RemoveFromUseList(sim);
+                    data.Soil.RemoveFromUseList(sim);
+                    if (data.Soil.IsGhosted())
+                    {
+                        data.Soil.UnGhost();
+                    }
+                    return;
+                }
+            }
+            if (data.PlantableObject != null)
+            {
+                EWPetPlantSeed.UnreservePlantablePlantingFailed(data.PlantableObject, sim, plantInteractionType);
+            }
+            if (data.Soil != null)
+            {
+                data.Soil.Destroy();
+            }
+        }
+
+        public void UnreservePlantablePlantingSucceeded()
+        {
+            CurrentTarget.RemoveFromUseList(Actor);
+            if (PlantInteractionType == PlantInteractionType.FromInventory || PlantInteractionType == PlantInteractionType.FromInventoryPlantMany)
+            {
+                Actor.Inventory.SetNotInUse(CurrentTarget);
+                Actor.Inventory.TryToRemove(CurrentTarget);
+            }
+        }
+
+        public static Plant CreatePlantFromSeed(IGameObject seedObj, Soil soil, Sim planter)
+        {
+            PlantDefinition plantDefinition = PlantHelper.GetPlantDefinition(seedObj);
+            if (plantDefinition == null)
+            {
+                return null;
+            }
+            float num = seedObj.Plantable.QualityLevel;
+            if (planter != null)
+            {
+                //int num2 = planter.SkillManager.GetSkillLevel(SkillNames.Gardening);
+                //if (num2 == -1)
+                //{
+                //	num2 = 0;
+                //}
+                //num *= Sims3.Gameplay.Skills.Gardening.QualityMultiplier[(int)plantDefinition.Rarity, num2];
+                //if (planter.HasTrait(TraitNames.SuperGreenThumb))
+                //{
+                //	num *= TraitTuning.SuperGreenThumbPlantQualityMultiplier;
+                //}
+            }
+            PlantInitParameters initParams = new PlantInitParameters(seedObj, num, plantDefinition, soil);
+            Plant plant = Plant.DoCreatePlantFromSeed(plantDefinition, soil, initParams, Plant.IsMushroom(seedObj));
+            plant?.AddSimWhoHelpedGrow(planter);
+            return plant;
+        }
+    }
+
+
+    public class EWPetWatchPlant : Interaction<Sim, Plant>
+    {
+        public class Definition : InteractionDefinition<Sim, Plant, EWPetWatchPlant>
+        {
+            public override bool Test(Sim a, Plant target, bool isAutonomous, ref GreyedOutTooltipCallback greyedOutTooltipCallback)
+            {
+                return true;
+            }
+
+            public override string GetInteractionName(Sim actor, Plant target, InteractionObjectPair iop)
+            {
+                return "Investigate"; //Localize - Investigate
+            }
+        }
+
+        public static InteractionDefinition Singleton = new Definition();
+
+        [TunableComment("Minutes between sims reacting to watching plants.")]
+        [Tunable]
+        public static float kTimeBetweenReactions = 5f;
+
+        [Tunable]
+        [TunableComment("Max time that a sim is watching a wild plant before it ends")]
+        public static float kWatchPlantMaxTime = 20f;
+
+        [Tunable]
+        [TunableComment("Possible reactions to play on the human sim watching the plant.")]
+        public static ReactionTypes[] kReactionList = new ReactionTypes[] {
+            ReactionTypes.HissPet,
+            ReactionTypes.BlankStarePet,
+            ReactionTypes.PositivePetLoud,
+            ReactionTypes.TerrifiedPet,
+            ReactionTypes.Sniff,
+            ReactionTypes.CatFlop
+        };
+
+        public override bool Run()
+        {
+            if (!Target.RouteSimToMeAndCheckInUse(Actor))
+            {
+                return false;
+            }
+            EWHerbLoreSkill skill = EWHerbLoreSkill.StartSkillGain(Actor);
+            if (skill != null)
+            {
+                StandardEntry();
+                BeginCommodityUpdates();
+                bool flag = DoLoop(ExitReason.Default, LoopFunc, null, kTimeBetweenReactions);
+                EndCommodityUpdates(flag);
+                StandardExit();
+                skill.StopSkillGain();
+                return flag;
+            }
+            return false;
+        }
+
+        public void LoopFunc(StateMachineClient smc, LoopData ld)
+        {
+            if (ld.mLifeTime > kWatchPlantMaxTime)
+            {
+                Actor.AddExitReason(ExitReason.Finished);
+                return;
+            }
+            ThoughtBalloonManager.BalloonData balloonData = new ThoughtBalloonManager.BalloonData(Target.GetThumbnailKey());
+            balloonData.BalloonType = ThoughtBalloonTypes.kThoughtBalloon;
+            balloonData.mPriority = ThoughtBalloonPriority.Low;
+            balloonData.mFlags = ThoughtBalloonFlags.ShowIfSleeping;
+            Actor.ThoughtBalloonManager.ShowBalloon(balloonData);
+            AcquireStateMachine("catdoginvestigate");
+            EnterStateMachine("catdoginvestigate", "Enter", "x");
+            AnimateSim("Investigate");
+            AnimateSim("Exit");
+            ReactionTypes reactionType = kReactionList[RandomUtil.GetInt(kReactionList.Length - 1)];
+            Actor.PlayReaction(reactionType, ReactionSpeed.ImmediateWithoutOverlay);
+        }
+    }
+
+
+    public class EWPetWaterPlant : ChainableGardeningInteraction<Plant>
+    {
+        public class Definition : InteractionDefinition<Sim, Plant, EWPetWaterPlant>
+        {
+            public override bool Test(Sim a, Plant target, bool isAutonomous,
+                ref GreyedOutTooltipCallback greyedOutTooltipCallback)
+            {
+                if (a.SkillManager.GetSkillLevel(EWHerbLoreSkill.SkillNameID) >= 3)
+                {
+                    if (target.mDormant)
+                    {
+                        greyedOutTooltipCallback = CreateTooltipCallback(Localization.LocalizeString("Gameplay/Objects/Gardening:DormantPlant"));
+                        return false;
+                    }
+                    return target.GetSoil().Dampness != SoilDampness.Wet;
+                }
+                return false;
+            }
+            public override string GetInteractionName(Sim a, Plant target, InteractionObjectPair interaction)
+            {
+                // TODO: Localize!
+                return "Water Plant";
+            }
+        }
+
+        public const string kWaterSoundName = "garden_water_lp";
+
+        public ObjectSound mWateringSound;
+
+        public static InteractionDefinition Singleton = new Definition();
+
+        public IGameObject mossBall;
+
+        public override void ConfigureInteraction()
+        {
+            float num = Target.GetWaterDuration(Actor);
+            if (num == 0f)
+            {
+                num = 1f;
+            }
+            TimedStage timedStage = new TimedStage(GetInteractionName(), num, showCompletionTime: false, selectable: true, visibleProgress: true);
+            base.Stages = new List<Stage>(new Stage[1] {
+                timedStage
+            });
+        }
+
+        public override void Cleanup()
+        {
+            if (mossBall != null)
+            {
+                mossBall.Destroy();
+                mossBall = null;
+            }
+            StopWateringSound(null, null);
+            base.Cleanup();
+        }
+
+        public override bool Run()
+        {
+            bool result = false;
+            IPond nearestWater = GetNearestWater(Actor.Position, float.MaxValue);
+            if (nearestWater == null)
+            {
+                DebugNote("Water Plant: No water source found.");
+                return false;
+            }
+            ulong notUsed = 10u; // Not used by the method. I don't know what it was supposed to be.
+
+            if (!DrinkFromPondHelper.RouteToDrinkLocation(nearestWater.RepresentativePondPosition(), Actor,
+                GameObjectHitType.WaterPond, notUsed))
+            {
+                return false;
+            }
+            mossBall = GlobalFunctions.CreateObjectOutOfWorld("petToyBallFoil", ProductVersion.EP5);
+            //bool isChaining = Actor.CurrentInteraction is ITendGarden;
+            mossBall.SetColorTint(0.75f, 1f, 0.35f, 0);  // RGB value for Dark Moss Green
+            mossBall.AddToWorld();
+            mossBall.SetPosition(Actor.Position);
+            CarryUtils.Acquire(Actor, mossBall);
+            EnterCarry(Actor, mossBall);
+            CarryUtils.Request(Actor, "PickUp");
+            CarryUtils.Request(Actor, "Carry");
+
+            EnterStateMachine("DrinkFromPond", "Enter", "x");
+            AnimateSim("Loop");
+            AnimateSim("Loop");
+            AnimateSim("Exit");
+
+            if (Target.RouteSimToMeAndCheckInUse(Actor) && WaterTestDisregardGardeningSkill(Target, Actor))
+            {
+                ConfigureInteraction();
+                //TryConfigureTendGardenInteraction(Actor.CurrentInteraction);
+                result = DoWater();
+            }
+            CarryUtils.Request(Actor, "PutDown");
+            CarryUtils.ExitCarry(Actor);
+            mossBall.Destroy();
+            //if (IsChainingPermitted(flag))
+            //{
+            //	IgnorePlants.Add(Target);
+            //	if (flag2)
+            //	{
+            //		PushNextInteractionInChain(Singleton, WaterTest, Target.LotCurrent);
+            //	}
+            //	else
+            //	{
+            //		PushNextInteractionInChain(Singleton, WaterTestDisregardGardeningSkill, Target.LotCurrent);
+            //	}
+            //}
+            return result;
+        }
+
+        //ADDED FOR ERROR USING DEBUGNOTE ABOVE AND BELOW
+        public static void DebugNote(string str)
+        {
+            throw new NotImplementedException();
+        }
+
+        public static void EnterCarry(Sim a, IGameObject target)
+        {
+            a.CarryStateMachine.SetActor("x", a);
+            a.CarryStateMachine.SetActor("object", target);
+            a.CarryStateMachine.SetParameter("Height", SurfaceHeight.Floor);
+            a.CarryStateMachine.SetParameter("model", "catToy", ProductVersion.EP5);
+            a.CarryStateMachine.SetParameter("NamespaceMap0From", "catToy");
+            a.CarryStateMachine.SetParameter("NamespaceMap0To", "object");
+            a.CarryStateMachine.EnterState("x", "Enter");
+        }
+
+        public bool DoWater()
+        {
+            // Not going to start skill gain until water is at least retrieved.
+            // No extra points for that much routing.
+            EWHerbLoreSkill skill = EWHerbLoreSkill.StartSkillGain(Actor);
+            if (skill != null)
+            {
+                StandardEntry();
+                BeginCommodityUpdates();
+                //mCurrentStateMachine = Target.GetStateMachine(Actor, out Soil dummyIk);
+                //if (mCurrentStateMachine == null)
+                //{
+                //	EndCommodityUpdates(succeeded: false);
+                //	StandardExit();
+                //}
+                //mDummyIk = dummyIk;
+                AcquireStateMachine("eatharvestablepet");
+                mCurrentStateMachine.SetActor("x", Actor);
+                mCurrentStateMachine.EnterState("x", "Enter");
+                SetParameter("IsEatingOnGround", paramValue: true);
+                AnimateSim("EatHarvestable");
+                StartWateringSound();
+                AddOneShotScriptEventHandler(201u, new SacsEventHandler(StopWateringSound));
+                StartStagesForTendableInteraction(this);
+                float duration = Target.GetWaterDuration(Actor);
+                if (duration == 0f)
+                {
+                    duration = 1f;
+                }
+                float startingWaterLevel = Target.WaterLevel;
+                float targetWaterLevel = 100f;
+                Target.AddSimWhoHelpedGrow(Actor);
+                EventTracker.SendEvent(EventTypeId.kWateredPlant, Actor, Target);
+                bool flag = DoLoop(ExitReason.Default, delegate (StateMachineClient unused, LoopData ld)
+                {
+                    float num2 = ld.mLifeTime / duration;
+                    this.Target.WaterLevel = num2 * targetWaterLevel + (1f - num2) * startingWaterLevel;
+                    if (this.Target.WaterLevel > targetWaterLevel)
+                    {
+                        this.Target.WaterLevel = targetWaterLevel;
+                    }
+                    if (ld.mLifeTime > duration)
+                    {
+                        this.Actor.AddExitReason(ExitReason.Finished);
+                    }
+                }, null);
+                //PauseTendGardenInteractionStage(Actor.CurrentInteraction);
+                if (flag && Target.WaterLevel < targetWaterLevel)
+                {
+                    Target.WaterLevel = targetWaterLevel;
+                }
+
+                AnimateSim("Exit");
+                EventTracker.SendEvent(EventTypeId.kGardened, Actor);
+                EndCommodityUpdates(succeeded: true);
+                StandardExit();
+                skill.StopSkillGain();
+                //UpdateTendGardenTimeSpent(this, SetWaterTimeSpent);
+                return flag;
+            }
+            return false;
+        }
+
+        public static IPond GetNearestWater(Vector3 starting_point, float max_distance)
+        {
+            IPond result = null;
+            float nearest_distance = max_distance;
+            IPond[] ponds = Sims3.Gameplay.Queries.GetObjects<IPond>();
+            DebugNote("GetNearestWater: " + ponds.Length + " water sources found");
+            foreach (IPond DHMOLocation in ponds)
+            {
+
+                float pond_distance = (starting_point - ((GameObject)DHMOLocation).Position).LengthSqr();
+                if (pond_distance < nearest_distance)
+                {
+                    result = DHMOLocation;
+                    nearest_distance = pond_distance;
+                }
+            }
+            if (result != null)
+            {
+                DebugNote("Nearest water source distance: " + nearest_distance);
+            }
+            return result;
+        }
+
+        public static void SetWaterTimeSpent(ITendGarden tendGardenInteraction, float timeSpent)
+        {
+            tendGardenInteraction.WaterTimeSpent = timeSpent;
+        }
+
+        public void StartWateringSound()
+        {
+            if (mWateringSound == null)
+            {
+                mWateringSound = (ObjectSound)(object)new ObjectSound(Target.ObjectId, "garden_water_lp");
+                ((Sound)mWateringSound).StartLoop();
+            }
+        }
+
+        public void StopWateringSound(StateMachineClient sender, IEvent evt)
+        {
+            if (mWateringSound != null)
+            {
+                ((Sound)mWateringSound).Stop();
+                ((Sound)mWateringSound).Dispose();
+                mWateringSound = null;
+            }
+        }
+    }
+
+
+    public class EWPetWeedPlant : ChainableGardeningInteraction<Plant>
+    {
+        public class Definition : InteractionDefinition<Sim, Plant, EWPetWeedPlant>
+        {
+            public override bool Test(Sim a, Plant target, bool isAutonomous, ref GreyedOutTooltipCallback greyedOutTooltipCallback)
+            {
+                if (a.SkillManager.GetSkillLevel(EWHerbLoreSkill.SkillNameID) >= 2)
+                {
+                    return target.GardenInteractionLotValidityTest(a) && target.HasWeeds && target.Alive;
+                }
+                return false;
+            }
+            public override string GetInteractionName(Sim a, Plant target, InteractionObjectPair interaction)
+            {
+                return "Weed"; //Localize - Weed
+            }
+        }
+
+        public Soil mDummyIk;
+
+        public static InteractionDefinition Singleton = new Definition();
+
+        public override void ConfigureInteraction()
+        {
+            float weedDuration = Target.GetWeedDuration(Actor);
+            TimedStage timedStage = new TimedStage(GetInteractionName(), weedDuration, showCompletionTime: false, selectable: true, visibleProgress: true);
+            base.Stages = new List<Stage>(new Stage[1] {
+            timedStage
+        });
+        }
+
+        public override void Cleanup()
+        {
+            if (mDummyIk != null)
+            {
+                mDummyIk.Destroy();
+                mDummyIk = null;
+            }
+            base.Cleanup();
+        }
+
+        public override bool Run()
+        {
+            bool flag = false;
+            if (Target.RouteSimToMeAndCheckInUse(Actor) && Target.HasWeeds)
+            {
+                ConfigureInteraction();
+                //TryConfigureTendGardenInteraction(Actor.CurrentInteraction);
+                flag = DoWeed();
+            }
+            //if (IsChainingPermitted(flag))
+            //{
+            //	IgnorePlants.Add(Target);
+            //	PushNextInteractionInChain(Singleton, WeedTest, Target.LotCurrent);
+            //}
+            return flag;
+        }
+
+        public bool DoWeed()
+        {
+            EWHerbLoreSkill skill = EWHerbLoreSkill.StartSkillGain(Actor);
+            if (skill != null)
+            {
+                StandardEntry();
+                BeginCommodityUpdates();
+                AcquireStateMachine("eatharvestablepet");
+                mCurrentStateMachine.SetActor("x", Actor);
+                mCurrentStateMachine.EnterState("x", "Enter");
+                SetParameter("IsEatingOnGround", paramValue: true);
+                AnimateSim("EatHarvestable");
+                StartStagesForTendableInteraction(this);
+                bool flag = DoLoop(ExitReason.Default);
+                //PauseTendGardenInteractionStage(Actor.CurrentInteraction);
+                if (flag)
+                {
+                    Target.AddSimWhoHelpedGrow(Actor);
+                    Target.HasWeeds = false;
+                    EventTracker.SendEvent(EventTypeId.kWeededPlant, Actor, Target);
+                }
+                AnimateSim("Exit");
+                EndCommodityUpdates(flag);
+                StandardExit();
+                EventTracker.SendEvent(EventTypeId.kGardened, Actor);
+                //UpdateTendGardenTimeSpent(this, SetWeedTimeSpent);
+                skill.StopSkillGain();
+                return flag;
+            }
+            return false;
+        }
+
+        public static void SetWeedTimeSpent(ITendGarden tendGardenInteraction, float timeSpent)
+        {
+            tendGardenInteraction.WeedTimeSpent = timeSpent;
+        }
+    }
+
+
+
+}
